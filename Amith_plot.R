@@ -1,0 +1,170 @@
+library(ggplot2)
+library(tibble)
+library(qusage)
+library(cowplot)
+library(readr)
+
+# Load your data
+exp_data <- read_csv("C:/Users/megha/Downloads/TCGA_FPKM_batch_adj_normalised_157 (1).csv")
+exp_data <- tibble::column_to_rownames(exp_data, var = "...1")  # Set gene names as rownames
+dim(exp_data)  # 16078 genes, 360 samples
+
+ssgsea_score <- read_csv("C:/Users/megha/Downloads/ssgsea_allsigns_tcga_tnbc (1).csv")
+ssgsea_score <- tibble::column_to_rownames(ssgsea_score, var = "...1")  # Set sample names as rownames
+dim(ssgsea_score)  # 360 samples, 63 signatures
+
+signatures <- read.gmt("C:/Users/megha/Downloads/Prognostic_genes_gmt_62.gmt")  # Gene sets
+
+# Function to analyze and plot signature goodness
+evaluate_signatures <- function(exp_data, ssgsea_score, signatures) {
+  
+  # Step 1: Identify shared genes between the expression matrix and each signature
+  dataset_genes <- rownames(exp_data)
+  signature_names <- names(signatures)
+  res <- lapply(signature_names, function(sig_name) {
+    signature_genes <- signatures[[sig_name]]
+    shared_genes <- intersect(dataset_genes, signature_genes)
+    n_shared <- length(shared_genes)
+    n_total <- length(signature_genes)
+    perc_genes <- n_shared / n_total * 100  # Percentage of signature genes in dataset
+    
+    # Step 2: Compute percentage of zero-variance genes in shared signature genes
+    if (n_shared == 1) {
+      perc_zero <- ifelse(exp_data[shared_genes, ] == 0, 100, 0)
+    } else {
+      perc_zero <- (apply(exp_data[shared_genes, ] == 0, 2, sum)/n_shared) * 100
+    }
+    
+    # Step 3: Correlate ssgsea scores with expression total_expression and zero percentage
+    total_expression <- colSums(exp_data)  # Total expression per sample
+    zeros_percentage <- colSums(exp_data == 0) / nrow(exp_data) * 100  # % zero genes per sample
+    ssgsea_sig <- ssgsea_score[, sig_name]
+    
+    coverage_cor <- cor(total_expression, ssgsea_sig, use = "complete.obs")
+    zeros_cor <- cor(zeros_percentage, ssgsea_sig, use = "complete.obs")
+    
+    # Step 4: Calculate goodness score
+    goodness <- (2 * perc_genes + 2 * (100 - median(perc_zero, na.rm = TRUE)) +
+                   (1 - abs(coverage_cor)) * 100 + (1 - abs(zeros_cor)) * 100) / 6
+    good_tab <- c(perc_genes, 100 - median(perc_zero, na.rm = TRUE),
+                  (1 - abs(coverage_cor)) * 50, (1 - abs(zeros_cor)) * 50)
+    list(perc_genes, perc_zero, coverage_cor, zeros_cor, goodness, good_tab, n_shared, n_total)
+  })
+  
+  # Step 5: Compile results
+  names(res) <- signature_names
+  goodness <- unlist(lapply(res, function(x) round(x[[5]], 1)))
+  order_sign <- factor(signature_names, levels = names(sort(goodness)))
+  
+  perc_genes <- unlist(lapply(res, function(x) round(x[[1]], 2)))
+  n_shared_total <- do.call(rbind, lapply(seq_along(signature_names), function(x) {
+    data.frame(signature = signature_names[x],
+               n_shared = res[[x]][[7]],
+               n_total = res[[x]][[8]])
+  }))
+  matrix_percent_zeros <- do.call(rbind, lapply(seq_along(signature_names), function(x) {
+    data.frame(p_zeros = res[[x]][[2]], signature = signature_names[x])
+  }))
+  coverage_cor <- unlist(lapply(res, function(x) round(x[[3]], 2)))
+  zeros_cor <- unlist(lapply(res, function(x) round(x[[4]], 2)))
+  
+  
+  # Prepare data for the tile plot
+  gene_data <- data.frame(
+    Signature = signature_names,
+    n_shared = sapply(res, function(x) x[[7]]),  # Correctly extract n_shared
+    n_total = sapply(res, function(x) x[[8]]),   # Correctly extract n_total
+    Fraction = paste0(sapply(res, function(x) x[[7]]), "/", sapply(res, function(x) x[[8]]))  # n_shared/n_total
+  )
+  gene_data$Signature <- factor(gene_data$Signature, levels = gene_data$Signature[order(goodness)])
+  
+  # Plot 1: Tile plot
+  g4 <- ggplot(gene_data, aes(x = "", y = Signature)) +
+    geom_tile(aes(fill = n_total), color = "black", fill = "darkseagreen2") +  # Create tiles
+    geom_text(aes(label = n_total), color = "black", size = 3.5, fontface = 'bold') +  # Add fraction text
+    labs(x = "Total \nSignature \nGenes") +
+    theme_light() +
+    theme(
+      axis.text.x = element_blank(),  # Hide x-axis labels
+      axis.ticks.x = element_blank(),
+      axis.text.y = element_blank(),
+      axis.title.y = element_blank(),
+      axis.title.x = element_text(margin = margin(t = 7))# Adjust y-axis text size
+    )
+  
+  g5 <- ggplot(gene_data, aes(x = "", y = Signature)) +
+    geom_tile(aes(fill = n_shared), color = "black", fill = "darkolivegreen1") +  # Create tiles
+    geom_text(aes(label = n_shared), color = "black", size = 3.5, fontface = 'bold') +  # Add fraction text
+    labs(x = "Genes \nPresent \nin Dataset") +
+    theme_light() +
+    theme(
+      axis.text.x = element_blank(),  # Hide x-axis labels
+      axis.ticks.x = element_blank(),
+      axis.text.y = element_blank(),
+      axis.title.y = element_blank(),
+      axis.title.x = element_text(margin = margin(t = 7))# Adjust y-axis text size
+    )
+  
+  # Plot 2: Goodness barplot
+  good_tab <- do.call(rbind, lapply(seq_along(res), function(x) {
+    data.frame(class = c("perc_genes", "perc_zero", "cov_cor", "zero_cor"),
+               signature = rep(signature_names[x], 4), len = res[[x]][[6]] / 3)
+  }))
+  good_tab$signature <- factor(good_tab$signature, levels = names(sort(goodness)))
+  good_tab$class <- factor(good_tab$class, levels = c("zero_cor", "cov_cor", "perc_zero", "perc_genes"))
+  
+  g0 <- ggplot(mapping = aes(x = good_tab$len, y = good_tab$signature)) +
+    geom_bar(aes(fill = good_tab$class), stat = "identity", show.legend = FALSE) +
+    geom_text(aes(x = goodness + 0.1, y = order_sign, label = as.character(goodness), hjust = 0)) +
+    xlim(0, 110) +
+    scale_fill_manual(values = c(perc_genes = "#eec55a", perc_zero = "#7474cc",
+                                 cov_cor = "#C08497", zero_cor = "#76bce4")) +
+    labs(x = "Goodness of signature \nfor the dataset") +
+    theme_minimal() + theme(axis.title.y = element_blank(), axis.ticks.y = element_blank())
+  
+  # Plot 3: Percentage of signature genes in the dataset
+  g1 <- ggplot(mapping = aes(x = perc_genes, y = order_sign)) +
+    geom_bar(stat = "identity", color = "#eec55a", fill = "#eec55a", width = 0.6) +
+    geom_text(aes(x = 8, y = order_sign, label = paste0(as.character(round(perc_genes)), "%"), hjust = 0)) +
+    xlim(0, 100) + labs(x = "% of signature genes\nin the dataset") +
+    theme_light() + theme(axis.title.y = element_blank(),
+                          axis.text.y = element_blank(), axis.ticks.y = element_blank())
+  
+  # Plot 4: Percentage of zero-variance genes
+  g2 <- ggplot(mapping = aes(x = matrix_percent_zeros$p_zeros, y = matrix_percent_zeros$signature)) +
+    geom_boxplot(outlier.size = 1, fill = "#ababe0", color = "#7474cc") +
+    labs(x = "% of zero value\nof signature genes") +
+    xlim(0, 100) + theme_light() +
+    theme(axis.title.y = element_blank(), axis.text.y = element_blank(),
+          axis.ticks.y = element_blank())
+  
+  # Plot 5: Correlations
+  color_point <- c(total_expression = "#C08497", total_zeroes = "#76bce4")
+  g3 <- ggplot() +
+    geom_vline(xintercept = 0, linetype = "dashed") +
+    geom_point(aes(x = coverage_cor, y = order_sign, color = "total_expression"), size = 2) +
+    geom_point(aes(x = zeros_cor, y = order_sign, color = "total_zeroes"), size = 2) +
+    xlim(-1, 1) +
+    labs(x = "Correlation") +
+    scale_color_manual(
+      values = color_point,
+      labels = c("Total Expression", "Total Zeros"), # Update legend labels here
+      name = "Color" # Update legend title here
+    ) +
+    theme_light() +
+    theme(
+      axis.title.y = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks.y = element_blank()
+    )
+  
+  
+  # Combine all plots
+  plot_grid(g0, g1, g4,g5, g2, g3, nrow = 1, rel_widths = c(1, 0.7, 0.2, 0.2, 0.6, 0.9), # Adjust relative widths for proper alignment
+            align = "h",                      # Align horizontally
+            axis = "tb" )
+}
+
+# Run the evaluation and plotting function
+evaluate_signatures(exp_data, ssgsea_score, signatures)
+  
