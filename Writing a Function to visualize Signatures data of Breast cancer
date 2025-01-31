@@ -1,3 +1,5 @@
+#Load packages
+library(Tidyverse)
 library(ggplot2)
 library(tibble)
 library(qusage)
@@ -9,10 +11,12 @@ exp_data <- read_csv("C:/Users/megha/Downloads/TCGA_FPKM_batch_adj_normalised_15
 exp_data <- tibble::column_to_rownames(exp_data, var = "...1")  # Set gene names as rownames
 dim(exp_data)  # 16078 genes, 360 samples
 
+#Load data of Single sample Gene-set-Enrichment-Analysis (ssgsea scores) for sample for each signature
 ssgsea_score <- read_csv("C:/Users/megha/Downloads/ssgsea_allsigns_tcga_tnbc (1).csv")
 ssgsea_score <- tibble::column_to_rownames(ssgsea_score, var = "...1")  # Set sample names as rownames
 dim(ssgsea_score)  # 360 samples, 63 signatures
 
+#load data of Signatures of Triple-Negative_Breast_cancer
 signatures <- read.gmt("C:/Users/megha/Downloads/Prognostic_genes_gmt_62.gmt")  # Gene sets
 
 # Function to analyze and plot signature goodness
