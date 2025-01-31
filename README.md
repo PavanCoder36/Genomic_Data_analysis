@@ -1,4 +1,3 @@
-Here's an improved and more polished version of your **README.md** file:  
 
 ---
 
